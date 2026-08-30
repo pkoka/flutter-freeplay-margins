@@ -1,0 +1,26 @@
+---
+title: "Limits of Identification-Based Flutter Margin Prediction on a Structure with Control-Surface Freeplay"
+author: "Pratham Koka"
+date: "August 2026"
+geometry: "margin=1.05in"
+fontsize: 10pt
+linestretch: 1.06
+colorlinks: true
+mainfont: "DejaVu Serif"
+sansfont: "DejaVu Sans"
+monofont: "DejaVu Sans Mono"
+header-includes:
+  - \usepackage{longtable}
+  - \usepackage{booktabs}
+  - \usepackage{float}
+  - \let\origfigure\figure
+  - \let\endorigfigure\endfigure
+  - \renewenvironment{figure}[1][2] {\expandafter\origfigure\expandafter[H]} {\endorigfigure}
+  - \usepackage{caption}
+  - \captionsetup{labelformat=empty,font=small,skip=6pt}
+  - \renewcommand{\arraystretch}{1.18}
+  - \usepackage{sectsty}
+  - \sectionfont{\large}
+  - \subsectionfont{\normalsize}
+  - \setlength{\emergencystretch}{3em}
+---

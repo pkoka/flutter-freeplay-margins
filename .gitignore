@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+*.npz
+*.png
+*.aux
+*.log
+*.out
+*.toc
+.DS_Store
