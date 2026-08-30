@@ -149,6 +149,11 @@ Read Section 9 of the memo before using any of this. The short version:
 Memo Section 8 lists fourteen errors found and corrected during this work, along with how each was
 caught.
 
+## License
+
+MIT, see `LICENSE`. This covers the code. The memo text and figures are the author's own work and
+may be cited normally.
+
 ## References
 
 Conner, M. D., Tang, D. M., Dowell, E. H. & Virgin, L. N. (1997). Nonlinear behavior of a typical
