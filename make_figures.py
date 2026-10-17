@@ -91,7 +91,7 @@ def figure2(path):
     U_pop = brentq(lambda U: popov_margin(sec, U, w_pop), 0.03*UF, 0.25*UF,
                    xtol=1e-4)
     w_lp = np.geomspace(1e-3, 1e3, 3000)
-    U_comb = brentq(lambda U: combined_margin(sec, U, w_lp), 0.18*UF, 0.30*UF,
+    U_comb = brentq(lambda U: combined_margin(sec, U, w_lp), 0.10*UF, 0.28*UF,
                     xtol=1e-3)
     U_free = gamma_onset(0.0)
     print(f"  fig2 recomputed: DF-min {Udf/UF:.4f} (gamma={gmin:.3f}), "
@@ -117,7 +117,7 @@ def figure2(path):
         ("Popov",                   U_pop/UF,    "rigorous",          "C2",   "o"),
         ("describing-fn minimum",   Udf/UF,      "heuristic",         "C0",   "s"),
         ("Zames-Falb alone",        None,        "certifies nothing", "0.55", "x"),
-        ("Popov x Zames-Falb",      U_comb/UF,   "UNRESOLVED",        "C1",   "D"),
+        ("Popov + Zames-Falb",      U_comb/UF,   "rigorous",          "C1",   "D"),
         ("free-region ceiling",     U_free/UF,   "hard limit",        "0.35", "|"),
         ("observed LCO 2.12 deg",   0.18,        "simulation",        "C3",   "^"),
         ("observed LCO 1.15 deg",   0.20,        "simulation",        "C3",   "^"),

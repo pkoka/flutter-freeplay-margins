@@ -10,13 +10,17 @@ restoring moment is also:
 Zames-Falb multipliers are exactly the class that exploits monotonicity, so
 they should - in principle - certify a higher speed than Popov.
 
-CRITERION. For phi monotone, odd, in sector [0,k], the loop is stable if there
+CRITERION. For phi slope-restricted in [0,k], the loop is stable if there
 exists a multiplier M(s) = 1 - Hhat(s), with h in L1 and ||h||_1 <= 1, s.t.
 
-    Re[ M(jw) (1/k + G(jw)) ] > 0   for all w.
+    Re[ M(jw) (1/k + G(jw)) ] > 0   for all w,
 
-For an ODD nonlinearity the sign restriction on h is dropped, so both causal
-and anticausal basis terms may enter with either sign.
+and h(t) >= 0 for all t. For an ODD nonlinearity the sign restriction on h is
+dropped (Turner, "Zames-Falb multipliers: don't panic", arXiv 2106.15913,
+Theorems 4 and 5). Symmetric freeplay is odd. Freeplay about a PRELOADED
+operating point is not (see preload.py), so odd=False is the only valid class
+there: every basis coefficient must then be non-negative, since each basis
+term has a non-negative impulse response.
 
 PARAMETRIZATION. Basis  psi_i(s) = (rho/(s+rho))^i   (causal)
                         psi_i(s) = (rho/(-s+rho))^i  (anticausal)
@@ -40,7 +44,7 @@ def basis(w, rho, N):
     return np.array(out)                       # (2N, nw)
 
 
-def zf_margin(sec, U, w, rhos=(6., 20., 60., 200.), N=4, sd=True):
+def zf_margin(sec, U, w, rhos=(6., 20., 60., 200.), N=4, sd=True, odd=True):
     """Max over multipliers of the worst-case certification margin.
     > 0 means Zames-Falb certifies absolute stability at this speed."""
     A, B, C, k, _ = loop(sec, U, sd)
@@ -62,7 +66,7 @@ def zf_margin(sec, U, w, rhos=(6., 20., 60., 200.), N=4, sd=True):
         bub = np.concatenate([F.real, [1.0]])
         Aub[nw, 1:] = 1.0
         cobj = np.zeros(1 + 2*m); cobj[0] = -1.0
-        bnds = [(None, None)] + [(0, None)]*(2*m)
+        bnds = [(None, None)] + [(0, None)]*m + [(0, None) if odd else (0, 0)]*m
         r = linprog(cobj, A_ub=Aub, b_ub=bub, bounds=bnds, method="highs")
         if r.status == 0:
             best = max(best, float(r.x[0]))
@@ -87,16 +91,24 @@ if __name__ == "__main__":
 
 # ---------------------------------------------------------------------------
 def combined_margin(sec, U, w, rhos=(6., 20., 60., 200.), N=4,
-                    etas=None, sd=True):
-    """Combined Popov x Zames-Falb multiplier,  M(s) = (1 + eta s)(1 - Hhat(s)).
+                    etas=None, sd=True, odd=True):
+    """Popov PLUS Zames-Falb,  M(s) = 1 + eta s - Hhat(s).
 
     Zames-Falb ALONE fails on this plant, and the reason is structural: with
     ||h||_1 <= 1 the multiplier obeys |M(jw)| <= 2, so it can only supply
-    bounded phase advance. Popov's (1 + j w eta) is unbounded, and that is what
-    this loop needs. The combined class contains both as special cases (eta = 0
-    gives ZF, c = 0 gives Popov) so it can never do worse than either.
+    bounded phase advance. Popov's eta s is unbounded, and that is what this
+    loop needs. The sum is a conic combination of two separately valid
+    conditions, which is how the literature adds a Popov term to a Zames-Falb
+    search (Carrasco, Maya-Gonzalez, Lanzon & Heath, SCL 2014). eta = 0 gives
+    Zames-Falb, h = 0 gives Popov, so it can never do worse than either.
 
-    For fixed eta the condition is still affine in c, so it stays an LP; eta is
+    The August version used the PRODUCT (1 + eta s)(1 - Hhat(s)). No theorem
+    I could find covers that product, and it is falsified on this plant: it
+    certified 0.2371 U_f (0.2356 U_f with h >= 0) while the plant sustains a
+    limit cycle at 0.18 U_f. The sum certifies 0.1613 U_f, which is
+    consistent with every observed onset.
+
+    For fixed eta the condition is affine in c, so it stays an LP; eta is
     gridded outside. Search eta over many decades - a narrow range silently
     returns the endpoint, which is the bug that bit the plain Popov search.
     """
@@ -113,7 +125,7 @@ def combined_margin(sec, U, w, rhos=(6., 20., 60., 200.), N=4,
         for rho in rhos:
             P = basis(w, rho, N)
             m = P.shape[0]
-            R = (P*Fe).real
+            R = (P*F).real
             Aub = np.zeros((nw + 1, 1 + 2*m))
             Aub[:nw, 0] = 1.0
             Aub[:nw, 1:1+m] = R.T
@@ -122,7 +134,8 @@ def combined_margin(sec, U, w, rhos=(6., 20., 60., 200.), N=4,
             Aub[nw, 1:] = 1.0
             cobj = np.zeros(1 + 2*m); cobj[0] = -1.0
             r = linprog(cobj, A_ub=Aub, b_ub=bub,
-                        bounds=[(None, None)] + [(0, None)]*(2*m),
+                        bounds=[(None, None)] + [(0, None)]*m
+                        + [(0, None) if odd else (0, 0)]*m,
                         method="highs")
             if r.status == 0:
                 best = max(best, float(r.x[0]))
