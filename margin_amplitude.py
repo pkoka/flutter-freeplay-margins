@@ -20,7 +20,7 @@ from phase1_conner import input_matrix, output_matrices
 from freeplay import integrate
 from sysid import po_moesp, modal_params
 
-DT_SIM, FS = 2e-4, 800.0
+DT_SIM, FS = 1.25e-4, 800.0   # dt must divide 1/FS exactly; 2e-4 gave 833.33 Hz
 
 
 def rap_record(sec, U, delta, amp, T=6.0, settle=0.0, snr_db=40.0, seed=0):
@@ -32,6 +32,7 @@ def rap_record(sec, U, delta, amp, T=6.0, settle=0.0, snr_db=40.0, seed=0):
     t, z, ns = integrate(sec, U, delta, T=T, dt=DT_SIM, u_func=uf, B=B,
                          record_from=settle)
     step = int(round(1/(FS*DT_SIM)))
+    assert abs(1/(step*DT_SIM) - FS) < 1e-9, "dt does not divide 1/FS"
     idx = np.arange(0, len(t), step)
     ts, y = t[idx], (C @ z.T)[:, idx]
     u = np.array([[uf(tt) for tt in ts]])

@@ -24,7 +24,7 @@ from phase1_conner import input_matrix, output_matrices
 from freeplay import integrate
 from sysid import po_moesp, modal_params
 
-FS, DT_SIM = 800.0, 2e-4
+FS, DT_SIM = 800.0, 1.25e-4   # dt must divide 1/FS exactly; 2e-4 gave 833.33 Hz
 
 
 def ringdown(sec, U, delta, amp, T=10.0, snr_db=40.0, seed=0):
@@ -33,6 +33,7 @@ def ringdown(sec, U, delta, amp, T=10.0, snr_db=40.0, seed=0):
     uf = lambda t: amp*np.exp(-0.5*((t - 0.25)/0.004)**2)
     t, z, ns = integrate(sec, U, delta, T=T, dt=DT_SIM, u_func=uf, B=B)
     step = int(round(1/(FS*DT_SIM)))
+    assert abs(1/(step*DT_SIM) - FS) < 1e-9, "dt does not divide 1/FS"
     idx = np.arange(0, len(t), step)
     ts, zz = t[idx], z[idx]
     y = (C @ zz.T)

@@ -91,7 +91,7 @@ def _rk4_beta(z, t, A, a, dbeta):
     return y
 
 
-def integrate(sec, U, delta, T, dt=2e-4, z0=None, structural_damping=True,
+def integrate(sec, U, delta, T, dt=1.25e-4, z0=None, structural_damping=True,
               record_from=0.0, u_func=None, B=None):
     """Time-march with exact switching. Returns t, z (recorded portion).
 

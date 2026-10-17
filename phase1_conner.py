@@ -91,7 +91,7 @@ def simulate_linear(sec, U, u_func, T=NSAMP/FS, fs=FS, oversample=16,
     return _sample(t, u, y, fs, oversample, rng, snr_db, adc_bits, U, A, B, C, D)
 
 
-def simulate_freeplay(sec, U, delta, T=NSAMP/FS, fs=FS, dt=2e-4, rng=None,
+def simulate_freeplay(sec, U, delta, T=NSAMP/FS, fs=FS, dt=1.25e-4, rng=None,
                       snr_db=40.0, adc_bits=16, beta0_mult=1.0,
                       settle=12.0, structural_damping=True):
     """LCO record: settle first, then capture a 5 s window at fs."""
@@ -103,7 +103,13 @@ def simulate_freeplay(sec, U, delta, T=NSAMP/FS, fs=FS, dt=2e-4, rng=None,
                               record_from=settle)
     C, _ = output_matrices()
     y = C @ zz.T
-    idx = np.arange(0, len(tt), max(1, int(round(1/(fs*dt)))))
+    # dt must divide 1/fs exactly. dt=2e-4 with fs=800 gave step=6 and a
+    # true rate of 833.33 Hz, a 4% error on the frequency axis that shows
+    # up as large mismatch at every lightly damped resonance.
+    step = int(round(1/(fs*dt)))
+    assert abs(1/(step*dt) - fs) < 1e-9, (
+        f"dt={dt} does not divide 1/fs={1/fs}; true rate would be {1/(step*dt)} Hz")
+    idx = np.arange(0, len(tt), max(1, step))
     ts, ys = tt[idx], y[:, idx]
     rms = np.std(ys, axis=1)*10**(-snr_db/20)
     ys = ys + rng.standard_normal(ys.shape)*np.atleast_2d(rms).T

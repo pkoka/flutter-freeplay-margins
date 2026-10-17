@@ -16,7 +16,7 @@ for name, dg in gaps.items():
     A, B, H, F = [], [], [], []
     z0 = [0, d, 0, 0, 0, 0, 0, 0]
     for r in ratios:
-        t, z, ns = integrate(sec, r*UF, d, T=14.0, dt=2e-4, z0=z0, record_from=11.0)
+        t, z, ns = integrate(sec, r*UF, d, T=14.0, dt=1.25e-4, z0=z0, record_from=11.0)
         a_, b_, h_ = rms_amplitudes(t, z, sec, d)
         A.append(a_); B.append(b_); H.append(h_)
         F.append(dominant_freq(t, z[:, 1]) if ns > 0 else np.nan)
