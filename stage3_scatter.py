@@ -28,6 +28,9 @@ TWO CORRECTIONS to the September version of the collapse sweep:
 
 Four replicates was too thin a basis for a standard deviation; twelve now.
 """
+import os
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")   # one BLAS thread per worker
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 from conner3dof import ConnerSection, ss_flutter, state_space

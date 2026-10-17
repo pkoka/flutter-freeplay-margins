@@ -91,6 +91,40 @@ def _rk4_beta(z, t, A, a, dbeta):
     return y
 
 
+def step(z, t, dt, delta, fields, extra=None):
+    """One RK4 step with exact Henon switching. fields = regions(...);
+    extra(t) -> additional forcing vector (8,), or None. Returns z, t,
+    whether a switching surface was crossed."""
+    A_stiff, A_free, a_pos, a_neg = fields
+    r = _region_of(z[IB], delta)
+    A, a = _fields(r, A_stiff, A_free, a_pos, a_neg)
+    if extra is not None:
+        a = a + extra(t)
+    zt = _rk4_t(z, A, a, dt)
+    rt = _region_of(zt[IB], delta)
+    if rt == r:
+        return zt, t + dt, False
+    # crossed a switching surface: Henon back onto it exactly
+    # pick the surface we actually crossed, NOT the sign of beta
+    # after the step: leaving region (3) downward still targets
+    # +delta, and getting this from zt[IB] aims at the wrong stop.
+    target = delta if (r == 3 or rt == 3) else -delta
+    y = _rk4_beta(z, t, A, a, target - z[IB])
+    if y is None:
+        return zt, t + dt, False
+    z_s, t_s = y[:8], y[8]
+    z_s[IB] = target                       # enforce the surface
+    rem = dt - (t_s - t)
+    if 0.0 < rem <= dt:
+        r2 = 3 if (target > 0 and z_s[IBD] > 0) else \
+             1 if (target < 0 and z_s[IBD] < 0) else 2
+        A2, a2 = _fields(r2, A_stiff, A_free, a_pos, a_neg)
+        if extra is not None:
+            a2 = a2 + extra(t_s)
+        return _rk4_t(z_s, A2, a2, rem), t_s + rem, True
+    return z_s, t_s, True
+
+
 def integrate(sec, U, delta, T, dt=1.25e-4, z0=None, structural_damping=True,
               record_from=0.0, u_func=None, B=None):
     """Time-march with exact switching. Returns t, z (recorded portion).
@@ -98,43 +132,15 @@ def integrate(sec, U, delta, T, dt=1.25e-4, z0=None, structural_damping=True,
     u_func(t) -> scalar shaker force, with input matrix B (8,1). The forcing is
     held constant across each RK4 step and across the Henon sub-step, which is
     consistent to the order of the scheme for a smooth input."""
-    A_stiff, A_free, a_pos, a_neg = regions(sec, U, delta, structural_damping)
+    fields = regions(sec, U, delta, structural_damping)
+    extra = None if u_func is None else (lambda s: B[:, 0]*u_func(s))
     z = np.zeros(8) if z0 is None else np.array(z0, float)
     t = 0.0
     ts, zs = [], []
     nswitch = 0
     while t < T:
-        r = _region_of(z[IB], delta)
-        A, a = _fields(r, A_stiff, A_free, a_pos, a_neg)
-        if u_func is not None:
-            a = a + B[:, 0]*u_func(t)
-        zt = _rk4_t(z, A, a, dt)
-        rt = _region_of(zt[IB], delta)
-        if rt != r:
-            # crossed a switching surface: Henon back onto it exactly
-            # pick the surface we actually crossed, NOT the sign of beta
-            # after the step: leaving region (3) downward still targets
-            # +delta, and getting this from zt[IB] aims at the wrong stop.
-            target = delta if (r == 3 or rt == 3) else -delta
-            y = _rk4_beta(z, t, A, a, target - z[IB])
-            if y is not None:
-                z_s, t_s = y[:8], y[8]
-                z_s[IB] = target                       # enforce the surface
-                rem = dt - (t_s - t)
-                if 0.0 < rem <= dt:
-                    r2 = 3 if (target > 0 and z_s[IBD] > 0) else \
-                         1 if (target < 0 and z_s[IBD] < 0) else 2
-                    A2, a2 = _fields(r2, A_stiff, A_free, a_pos, a_neg)
-                    if u_func is not None:
-                        a2 = a2 + B[:, 0]*u_func(t_s)
-                    z, t = _rk4_t(z_s, A2, a2, rem), t_s + rem
-                else:
-                    z, t = z_s, t_s
-                nswitch += 1
-            else:
-                z, t = zt, t + dt
-        else:
-            z, t = zt, t + dt
+        z, t, sw = step(z, t, dt, delta, fields, extra)
+        nswitch += sw
         if t >= record_from:
             ts.append(t); zs.append(z.copy())
     return np.array(ts), np.array(zs), nswitch
