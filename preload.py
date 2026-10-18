@@ -48,9 +48,12 @@ preload. N1 is real, so w is a phase crossover of G, and N1 = gamma*K_beta
 with gamma = -1/(K_beta Re G(jw)) in (0, 1). At zero preload B0 = 0 solves the
 mean equation and this is the memo's gamma family exactly.
 
-TIME DOMAIN. Every point starts from z* plus a flap kick of several sizes and
-both signs, because one initial condition reports which attractor that one
-trajectory fell into, not what the plant does.
+TIME DOMAIN. Every point starts from z* plus 16 random full-state
+perturbations (displacements 1 to 12 gap widths, with velocities), because one
+initial condition reports which attractor that one trajectory fell into, not
+what the plant does. Flap-position kicks alone are not enough: the
+subcritical limit cycle at 0.18 U_f is only reached from starts that carry
+velocity, and a position-only sweep reports its onset at 0.30 U_f.
 """
 import os
 os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")   # one BLAS thread per worker
@@ -66,10 +69,10 @@ from zames_falb import zf_margin, combined_margin
 
 DELTA = np.deg2rad(2.12)
 RATIOS = np.round(np.arange(0.10, 0.701, 0.02), 3)
-KICKS = (-6.0, -2.0, -0.3, 0.3, 2.0, 6.0)          # flap kick, gap widths
+N_IC = 16                                          # random starts per point
 CASES = (("hinge", 0.0), ("hinge", 0.25), ("hinge", 0.5), ("hinge", 1.0),
          ("hinge", 2.0), ("alpha0", 2.0), ("alpha0", 4.0), ("alpha0", 6.0))
-T_SIM, T_REC = 30.0, 6.0
+T_SIM, T_REC = 40.0, 8.0
 TH = (np.arange(4096) + 0.5)*2*np.pi/4096
 SIN = np.sin(TH)
 
@@ -245,10 +248,19 @@ def harmonic_balance(sec, U, delta, f0, n=240):
 # --------------------------------------------------------------------------
 # time domain
 # --------------------------------------------------------------------------
+def random_start(zs, delta, b, seed):
+    """z* plus a random displacement-and-velocity perturbation, scaled by a
+    random 1 to 12 gap widths (plunge scaled by the semichord)."""
+    rng = np.random.default_rng(seed)
+    sc = rng.uniform(1.0, 12.0)*delta*np.array([1.0, 1.0, b])
+    return zs + np.concatenate([rng.standard_normal(3)*sc,
+                                rng.standard_normal(3)*sc*30.0, [0.0, 0.0]])
+
+
 def _simulate(args):
-    """One trajectory from z* + flap kick; report the recorded window."""
+    """One trajectory from a random start about z*; report the recorded window."""
     sec, U, delta, f0, zs, kick = args
-    z0 = zs.copy(); z0[1] += kick*delta
+    z0 = random_start(zs, delta, sec.b, kick)
     t, z, _ = integrate(sec, U, delta, T=T_SIM, z0=z0, u_func=lambda s: 1.0,
                         B=f0[:, None], record_from=T_SIM - T_REC)
     b = z[:, 1]
@@ -267,7 +279,8 @@ def sustained(r, tol=1e-3):
         r["amp_last"] > 0.95*r["amp_first"]
 
 
-def time_domain(pool, sec, UF, delta=DELTA, cases=CASES, ratios=RATIOS, kicks=KICKS):
+def time_domain(pool, sec, UF, delta=DELTA, cases=CASES, ratios=RATIOS,
+                kicks=tuple(range(N_IC))):
     jobs, keys = [], []
     for kind, lev in cases:
         for r in ratios:
@@ -354,7 +367,8 @@ def main():
         TD = time_domain(pool, sec, UF)
 
     print("\n" + "=" * 78); print("3. CHECK: BELOW THE CERTIFIED SPEED EVERY START RETURNS TO z*"); print("=" * 78)
-    print("  a valid certificate cannot be beaten by any simulated trajectory.")
+    print(f"  a valid certificate cannot be beaten by any simulated trajectory ({N_IC} random")
+    print("  starts per speed, displacements up to 12 gap widths, with velocity).")
     for key in CASES:
         below = [x for (kd, lv, r), rs in TD.items() for x in rs
                  if (kd, lv) == key and r < cert[key]]
@@ -365,8 +379,8 @@ def main():
 
     print("\n" + "=" * 78); print("4. LIMIT CYCLES: DESCRIBING FUNCTION AGAINST SIMULATION"); print("=" * 78)
     print("  amplitudes are half peak-to-peak flap motion about its mean, in gap widths.")
-    print("  sim: the largest sustained cycle over all kicks, and how many of the six")
-    print("  kicks end on a cycle. DF: every harmonic-balance solution (amplitude/mean).")
+    print(f"  sim: the largest sustained cycle over {N_IC} random starts, and how many of")
+    print("  them end on a cycle. DF: every harmonic-balance solution (amplitude/mean).")
     onsets = {}
     for kind, lev in CASES:
         print(f"\n  {kind} {lev:g}")
@@ -402,7 +416,7 @@ def main():
         print(f"  {kind+' '+f'{lev:g}':>12} {cert[(kind, lev)]:>8.4f} "
               f"{(f'{on_df:.2f}' if on_df else '-'):>9} {(f'{on_sim:.2f}' if on_sim else '-'):>10}")
     print(f"  grid step {RATIOS[1]-RATIOS[0]:.2f} U_f; onsets are the first grid speed with")
-    print("  a solution (DF) or a sustained cycle from some kick (sim).")
+    print("  a solution (DF) or a sustained cycle from some random start (sim).")
 
     print("\n" + "=" * 78); print("6. IF THE PRELOAD IS MISESTIMATED BY 25 PERCENT"); print("=" * 78)
     print("  DF amplitude predicted with the preload level scaled, against the true")

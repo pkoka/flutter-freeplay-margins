@@ -24,6 +24,7 @@ from scipy.optimize import brentq
 from conner3dof import ConnerSection, ss_flutter
 from absolute_stability import loop, G
 from freeplay import integrate
+from conner3dof import state_space
 from stage2a_harness import perturbed_section, periodic_run, frf_model, OUT
 
 CACHE = "grid.pkl"
@@ -50,6 +51,67 @@ def build_grid(sec_n, sec_t, UF):
                 Ht_free=frf_model(sec_t, U, f, "free")))
     print(f"  {len(rows)} runs in {time.time()-t0:.0f} s")
     return rows
+
+
+# --------------------------------------------------------------------------
+# a usable weight: floor at antiresonances, then a fitted low-order bound
+# --------------------------------------------------------------------------
+FLOOR = 0.05
+
+
+def mismatch_floor(H, Hr, floor=FLOOR):
+    """|H - Hr| relative to |Hr|, except where |Hr| falls below floor*max|Hr|
+    (an antiresonance), where it is measured against that floor instead.
+    Pure relative error is meaningless where |Hr| -> 0, and those bins alone
+    set the infinity norm of a raw per-bin W (max 6.9 in September)."""
+    den = np.maximum(np.abs(Hr), floor*np.abs(Hr).max(axis=-1, keepdims=True))
+    return np.abs(H - Hr)/den
+
+
+def fit_weight(f, Wdata, n=36):
+    """Lowest first-order W(s) = k (s/w1 + 1)/(s/w2 + 1), w1, w2 > 0 (stable,
+    minimum phase), bounding Wdata at every measured line, chosen to minimise
+    the mean log magnitude over the band. Returns W evaluated on rad/s."""
+    w = 2*np.pi*f
+    best = None
+    for w1 in np.geomspace(2*np.pi*0.2, 2*np.pi*300, n):
+        for w2 in np.geomspace(2*np.pi*0.2, 2*np.pi*300, n):
+            shape = np.abs((1j*w/w1 + 1)/(1j*w/w2 + 1))
+            k = np.max(Wdata/shape)
+            cost = np.mean(np.log(k*shape))
+            if best is None or cost < best[0]:
+                best = (cost, k, w1, w2)
+    _, k, w1, w2 = best
+    return lambda wr: k*np.abs((1j*wr/w1 + 1)/(1j*wr/w2 + 1)), (k, w1/(2*np.pi), w2/(2*np.pi))
+
+
+def hinge_frf(sec, U, f, region="free"):
+    """FRF from flap hinge moment to the three RVDTs: the channel the
+    robust-stability test is about."""
+    A = state_space(sec, U, True, region)
+    b = np.zeros((8, 1)); b[3:6, 0] = loop(sec, U)[1][3:6, 0]
+    Cm = np.zeros((3, 8)); Cm[0, 0] = Cm[1, 1] = Cm[2, 2] = 1.0
+    return np.stack([(Cm @ np.linalg.solve(2j*np.pi*fi*np.eye(8) - A, b))[:, 0]
+                     for fi in f], axis=-1)
+
+
+def measure_weight(pct, UF, conds=((0.10, 0.05), (0.10, 0.2), (0.16, 0.05),
+                                   (0.16, 0.2), (0.22, 0.05), (0.22, 0.2)), seed=101):
+    """W from in-gap runs on the pct-perturbed truth against the FREE nominal,
+    max over channels and runs, with the antiresonance floor. Also returns the
+    true hinge-channel error at the same lines, to check the shaker-channel
+    proxy, and how many runs stayed in the gap."""
+    sec_n = ConnerSection(); sec_t, _ = perturbed_section(pct)
+    Ws, Ts, kept = [], [], 0
+    for r, a in conds:
+        R = periodic_run(sec_t, r*UF, DELTA, a, P=16.0, nper=3, drop=1, seed=seed)
+        if R["switches"] > 0:
+            continue
+        kept += 1
+        f = R["f"]
+        Ws.append(mismatch_floor(R["H"], frf_model(sec_n, r*UF, f, "free")).max(0))
+        Ts.append(mismatch_floor(hinge_frf(sec_t, r*UF, f), hinge_frf(sec_n, r*UF, f)).max(0))
+    return f, np.max(Ws, axis=0), np.max(Ts, axis=0), kept
 
 
 def popov_robust(sec, U, Wv):

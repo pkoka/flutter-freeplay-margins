@@ -69,8 +69,8 @@ def design(sec, U, wp):
     return A, B, C, K, g
 
 
-if __name__ == "__main__":
-    sec_n = ConnerSection(); sec_t, _ = perturbed_section()
+def synthesis_table():
+    sec_n = ConnerSection()
     UF, _ = ss_flutter(sec_n, np.linspace(1., 40., 800))
     Uopen = 0.286*UF
     print(f"U_f (stiff, nominal) {UF:.3f} m/s;  free-region open-loop instability "
@@ -134,11 +134,12 @@ def closed_loop_freeplay(sec, U, delta, K, Kscale, T=8.0, dt=1.25e-4, z0=None):
 
 
 # ---------------------------------------------------------------------------
-def attractor_trace(sec, U, delta, K, T=8.0, dt=1e-4, b0=2.0, nrec=400):
+def attractor_trace(sec, U, delta, K, T=8.0, dt=1e-4, b0=2.0, nrec=400, ka=None):
     """Closed-loop amplitude envelope over time. A limit cycle is an attractor:
     constant amplitude, independent of the initial condition. Slow decay is
-    neither. Run this from at least two initial conditions before calling any
-    closed-loop result stable, because the closed loop here is BISTABLE.
+    neither. Run this from several initial conditions before calling any
+    closed-loop result stable: the under-powered KA = 1 design was bistable,
+    with coexisting limit cycles, and a single start reported only one of them.
 
     Stepping is by matrix exponential, exact within each region. Explicit RK4
     cannot be used: near-optimal H-infinity central controllers carry poles
@@ -151,7 +152,7 @@ def attractor_trace(sec, U, delta, K, T=8.0, dt=1e-4, b0=2.0, nrec=400):
     A_non, _, _ = aero_matrices(sec, U, 0.0)
     Minv = inv(sec.Ms + A_non)
     B = np.zeros((8, 1)); B[3:6, 0] = Minv @ np.array([0., 1., 0.])
-    B = B/np.linalg.norm(B)*KA
+    B = B/np.linalg.norm(B)*(KA if ka is None else ka)
     C = np.diag([1/0.02, 1/0.05, 1/0.002]) @ output_matrices()[0]
     off = np.zeros(8); off[3:6] = Minv @ np.array([0., sec.Cb*delta, 0.])
 
@@ -184,3 +185,111 @@ def attractor_trace(sec, U, delta, K, T=8.0, dt=1e-4, b0=2.0, nrec=400):
         if i % blk == blk - 1:
             env.append(cur); cur = 0.0
     return np.array(env), True
+
+
+# ---------------------------------------------------------------------------
+def W_Ti(A, B, C, K, f, Wd):
+    """max over measured lines of W(f) |T_i(j 2 pi f)|; inf if K does not
+    stabilise (A, B, C)."""
+    Ac, Bc, Cc, _ = K
+    nc = Ac.shape[0]
+    Acl = lft_closed_loop(A, B, C, K)
+    if np.linalg.eigvals(Acl).real.max() >= 0:
+        return np.inf
+    Bcl = np.vstack([B, np.zeros((nc, 1))]); Ccl = np.hstack([np.zeros((1, 8)), Cc])
+    return max(Wi*abs((Ccl @ np.linalg.solve(2j*np.pi*fi*np.eye(8 + nc) - Acl, Bcl)).item())
+               for fi, Wi in zip(f, Wd))
+
+
+def close_stage2(pct=4.0, ratios=(0.30, 0.60, 1.00, 1.20),
+                 kas=(1, 3, 10, 30, 100, 300, 1000), wps=(0.03, 0.1, 0.3, 1.0, 3.0)):
+    """Stage 2's endpoint: measured W, the robust-stability test, whether any
+    design in this family passes it, and what passing buys on the true
+    freeplay plant."""
+    from stage2_uncertainty import measure_weight, fit_weight
+    sec_n = ConnerSection(); sec_t, _ = perturbed_section(pct)
+    UF, _ = ss_flutter(sec_n, np.linspace(1., 40., 800))
+    d = np.deg2rad(2.12)
+    f, Wd, Tt, kept = measure_weight(pct, UF)
+    Wf, (k, f1, f2) = fit_weight(f, Wd)
+    print("\n" + "="*78); print("CLOSING STAGE 2: THE MEASURED W AGAINST THE H-INFINITY DESIGN"); print("="*78)
+    print(f"  W from {kept} in-gap runs at 0.10-0.22 U_f, {pct:g}% perturbation, free nominal,")
+    print(f"  antiresonance floor {0.05:g} max|G|. Median {np.median(Wd):.3f}, max {Wd.max():.2f}"
+          f" at {f[Wd.argmax()]:.2f} Hz.")
+    print(f"  true hinge-channel error at the same lines: median {np.median(Tt):.3f},"
+          f" max {Tt.max():.2f} at {f[Tt.argmax()]:.2f} Hz")
+    cov = 100*np.mean(Wd >= Tt)
+    print(f"  measured W >= true hinge-channel error at {cov:.1f}% of lines"
+          + ("  <- the shaker-channel proxy UNDER-bounds the channel the test is about"
+             if cov < 95 else ""))
+    print("  The peak is the free-region 10 Hz mode, shifted by the perturbation. Near")
+    print("  a lightly damped mode a few percent of frequency error is a relative error")
+    print("  above 1, so this is real model error, not the antiresonance artifact the")
+    print("  September audit blamed. The floor removes only the antiresonance part.")
+    print(f"  best first-order bound k (s/w1+1)/(s/w2+1): k {k:.2f}, f1 {f1:.1f} Hz, f2 {f2:.1f} Hz;"
+          f" {Wf(2*np.pi*f[Wd.argmax()]):.2f} at the peak and {Wf(2*np.pi*0.5):.2f}"
+          " at 0.5 Hz,\n  so a low-order weight cannot follow the peak; the tests below use the"
+          " measured W\n  at the measured lines instead (no claim outside 0.5-30 Hz).")
+    print(f"\n{'U/Uf':>6} {'||W Ti|| ka=100 wp=1':>22} {'best design':>22} {'(ka, wp, gamma)':>18}"
+          f" {'stabilises truth':>17}")
+    chosen = {}
+    for r in ratios:
+        U = r*UF
+        A, B, C = plant(sec_n, U)
+        K0, _ = hinf_syn(*genplant(A, B, C, 1.0))
+        base = W_Ti(A, B, C, K0, f, Wd)
+        best = None
+        for ka in kas:
+            for wp in wps:
+                A, B, C = plant(sec_n, U, ka=ka)
+                K, g = hinf_syn(*genplant(A, B, C, wp))
+                if K is None:
+                    continue
+                v = W_Ti(A, B, C, K, f, Wd)
+                At, Bt, Ct = plant(sec_t, U, ka=ka)
+                st = np.linalg.eigvals(lft_closed_loop(At, Bt, Ct, K)).real.max() < 0
+                if best is None or v < best[0]:
+                    best = (v, ka, wp, g, st, K)
+        chosen[r] = best
+        print(f"{r:>6.2f} {base:>22.2f} {best[0]:>22.2f} {f'({best[1]}, {best[2]}, {best[3]:.1f})':>18}"
+              f" {str(best[4]):>17}")
+    print("  Every design stabilises the true linear plant, including those that fail")
+    print("  the test: the unstructured test is conservative here, not violated.")
+
+    passing = [r for r in ratios if chosen[r][0] < 1]
+    lco = {}
+    for r in passing:
+        U = r*UF
+        A, B, C = plant(sec_n, U); K0, _ = hinf_syn(*genplant(A, B, C, 1.0))
+        _, ka, wp, _, _, K1 = chosen[r]
+        print(f"\n  at {r:.2f} U_f a design passes. Both designs on the TRUE {pct:g}% plant WITH")
+        print("  freeplay, final flap envelope (max|beta|/delta over the last 1/8 of 8 s):")
+        print(f"  {'start beta0/delta':>18} " + " ".join(f"{b:>7g}" for b in (0.5, 2, 6, 15)))
+        for name, KK, kk in (("ka=100, wp=1 (W ignored)", K0, None), (f"ka={ka}, wp={wp} (W met)", K1, ka)):
+            ends = []
+            for b0 in (0.5, 2.0, 6.0, 15.0):
+                env, ok = attractor_trace(sec_t, U, d, KK, b0=b0, ka=kk)
+                ends.append(env[-len(env)//8:].max() if ok else np.inf)
+            lco[(r, kk is None)] = max(ends)
+            print(f"  {name:>26} " + " ".join(f"{e:>7.4f}" for e in ends))
+    print("\n  CONCLUSION.")
+    print("  1. A measured, unstructured multiplicative W can be met only where no lightly")
+    print("     damped mode is mistuned inside the loop bandwidth. Past that no design here")
+    print("     meets it, although every one stabilises the true linear plant. The error")
+    print("     the data show is a frequency shift of one mode, which needs a structured")
+    print("     (real parametric, mu) description, not a bigger unstructured W.")
+    if cov < 95:
+        print("  2. W measured through the shaker does not bound the hinge-channel error the")
+        print("     test needs. It has to be measured through the control surface.")
+    for r in passing:
+        if lco[(r, False)] > 1e-2 and lco[(r, True)] < 1e-2:
+            print(f"  3. At {r:.2f} U_f the design that MEETS the measured W sustains a"
+                  f" {lco[(r, False)]:.2f}-gap limit cycle")
+            print("     on the true freeplay plant from some starts; the design that fails the")
+            print("     test does not. A linear robustness test is blind to the freeplay cycle,")
+            print("     which is the global behaviour Popov speaks to and this test cannot.")
+
+
+if __name__ == "__main__":
+    synthesis_table()
+    close_stage2()

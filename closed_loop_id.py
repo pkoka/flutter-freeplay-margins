@@ -61,7 +61,7 @@ M_REF = 0.1                                   # N m per unit span
 SIG_V = np.array([5e-5, 1e-4, 5e-6])          # RVDT noise: rad, rad, m
 SIG_W = 0.5                                   # turbulence force, N per unit span
 FSR = np.array([0.17, 0.17, 0.02])            # ADC full scale: +/-10 deg, +/-2 cm
-R_AMP = 0.04                                  # multisine amplitude, N m per unit span
+R_AMP = 0.12                                  # multisine amplitude, N m per unit span
 RATIOS = (0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15, 1.20)
 SEEDS = (11, 23, 37, 51, 67, 83)
 NAMES = ("direct", "ind exact", "ind doc", "joint I/O")
@@ -231,12 +231,20 @@ def estimates(res, Kas, Kdoc):
 # --------------------------------------------------------------------------
 # modal extraction
 # --------------------------------------------------------------------------
-def modal_fit(f, H, band=(1.5, 14.0), nd=6, iters=40):
-    """Sanathanan-Koerner common-denominator rational fit in s over a band,
-    channels normalised. Returns continuous poles (rad/s)."""
+def modal_fit(f, H, band=(1.5, 14.0), nd=6, iters=40, weights=None):
+    """Sanathanan-Koerner common-denominator rational fit in s over a band.
+    weights (3, nf), normally 1/standard error of each line from the
+    period-to-period scatter; without them, channels are normalised by their
+    median magnitude. Unweighted fits on closed-loop data chase the noise at
+    the flutter frequency, where the loop starves the plant input, and return
+    spurious lightly damped poles. Returns continuous poles (rad/s)."""
     sel = (f >= band[0]) & (f <= band[1])
     w = 2*np.pi*f[sel]; wm = w.max(); s = 1j*w/wm
-    Hs = H[:, sel]/np.median(np.abs(H[:, sel]), axis=1, keepdims=True)
+    if weights is None:
+        Hs = H[:, sel]/np.median(np.abs(H[:, sel]), axis=1, keepdims=True)
+        Ws = np.ones_like(Hs, dtype=float)
+    else:
+        Hs, Ws = H[:, sel], weights[:, sel]
     m = len(w)
     S = np.vander(s, nd + 1, increasing=True)                # 1, s, ..., s^nd
     Dp = np.ones(m)
@@ -246,7 +254,8 @@ def modal_fit(f, H, band=(1.5, 14.0), nd=6, iters=40):
             blk = np.zeros((m, nd + 3*(nd + 1)), complex)
             blk[:, :nd] = -Hs[i][:, None]*S[:, 1:]           # -H * (d1 s + ... )
             blk[:, nd + i*(nd + 1): nd + (i + 1)*(nd + 1)] = S
-            rows.append(blk/Dp[:, None]); rhs.append(Hs[i]/Dp)
+            sc = Ws[i]/Dp
+            rows.append(blk*sc[:, None]); rhs.append(Hs[i]*sc)
         A = np.vstack(rows); b = np.concatenate(rhs)
         x, *_ = np.linalg.lstsq(np.vstack([A.real, A.imag]),
                                 np.concatenate([b.real, b.imag]), rcond=None)
@@ -256,6 +265,29 @@ def modal_fit(f, H, band=(1.5, 14.0), nd=6, iters=40):
             break
         Dp = Dn
     return np.roots(np.concatenate([d[::-1], [1.0]]))*wm
+
+
+def line_weights(results):
+    """1/standard error per line, pooled over the periods of all runs given."""
+    Gp = np.concatenate([o["Yp"]/o["Up"][:, None, :] for o in results])
+    return np.sqrt(len(Gp))/Gp.std(0, ddof=1)
+
+
+def pooled_modes(results, Ka, Kd):
+    """Flutter-mode zeta per estimator from the replicate-averaged estimate,
+    with a leave-one-replicate-out jackknife standard deviation."""
+    f = results[0]["f"]
+    G = [estimates(o, Ka, Kd) for o in results]
+    n = len(results)
+    out = {}
+    for name in NAMES:
+        H = np.array([g[name] for g in G])
+        z = flutter_mode(modal_fit(f, H.mean(0), weights=line_weights(results)))[0]
+        jk = [flutter_mode(modal_fit(f, np.delete(H, i, 0).mean(0),
+                                     weights=line_weights(results[:i] + results[i+1:])))[0]
+              for i in range(n)]
+        out[name] = (z, np.sqrt((n - 1)/n*np.nansum((np.array(jk) - np.nanmean(jk))**2)))
+    return out
 
 
 def flutter_mode(poles, fband=(3.0, 9.0)):
@@ -336,7 +368,7 @@ def main():
 
     # ------------------------------------------------------------- 2
     print("\n" + "=" * 86); print("2. CLOSED-LOOP BACK-CALCULATION, LINEAR TRUTH"); print("=" * 86)
-    jobs = [(sec_t, r*UF, Ks[r][0], s, True, "linear", None, drops[r] + 4, drops[r])
+    jobs = [(sec_t, r*UF, Ks[r][0], s, True, "linear", None, drops[r] + 8, drops[r])
             for r in RATIOS for s in SEEDS]
     with ProcessPoolExecutor(max_workers=12) as pool:
         out = list(pool.map(run, jobs, chunksize=2))
@@ -356,18 +388,26 @@ def main():
         f = res[(r, SEEDS[0])]["f"]
         Pa, Ga, _, Ca = sampled_plant(sec_t, U)
         Gt = frf(Pa, Ga, Ca, f)[:, 0, :]
-        errs = {n: [] for n in NAMES}; zeta = {n: [] for n in NAMES}
+        errs = {n: [] for n in NAMES}
         for s in SEEDS:
             G = estimates(res[(r, s)], Ka, Kd)
             for n in NAMES:
                 errs[n].append(np.median(np.abs(G[n] - Gt)/np.abs(Gt), axis=1))
-                zeta[n].append(flutter_mode(modal_fit(f, G[n]))[0])
         print(f"{r:>6.2f} " + " ".join(
             " ".join(f"{v:6.3f}" for v in np.median(errs[n], axis=0)) + " " for n in NAMES))
+        pm = pooled_modes([res[(r, s)] for s in SEEDS], Ka, Kd)
         for n in NAMES:
-            modal[n].append((np.median(zeta[n]), np.std(zeta[n], ddof=1)))
+            modal[n].append(pm[n])
+    Pa, Ga, _, Ca = sampled_plant(sec_t, 1.1*UF)
+    Kf = frf(*Ks[1.1][0], f_chk)[0]; Gt = frf(Pa, Ga, Ca, f_chk)[:, 0, :]
+    ft = truth_mode(sec_t, 1.1*UF)[1]; i = np.argmin(abs(f_chk - ft))
+    print(f"\n  why the flutter mode is the hard part: at 1.10 U_f the loop gain there is"
+          f"\n  |KG| = {abs((Kf*Gt).sum(0)[i]):.1f}, so the plant input is |T_ur| ="
+          f" {abs(1/(1 - (Kf*Gt).sum(0)[i])):.3f} of the excitation at exactly the"
+          f"\n  frequency that carries the flutter information.")
 
-    print("\n  flutter-mode damping of the back-calculated plant (median, sd over replicates)")
+    print("\n  flutter-mode damping of the back-calculated plant: one weighted fit to the")
+    print(f"  {len(SEEDS)}-replicate average (jackknife sd in brackets)")
     print(f"{'U/Uf':>6} {'truth':>8} " + " ".join(f"{n:>18}" for n in NAMES))
     truth_z = [truth_mode(sec_t, r*UF)[0] for r in RATIOS]
     for i, r in enumerate(RATIOS):
@@ -388,13 +428,14 @@ def main():
             ol.append((r, None)); continue
         drop = max(DROP, int(np.ceil(5/(zt*2*np.pi*ft)/P)))
         ol.append((r, drop))
-    jobs = [(sec_t, r*UF, Ks[r][0], s, False, "linear", None, d + 4, d)
+    jobs = [(sec_t, r*UF, Ks[r][0], s, False, "linear", None, d + 8, d)
             for r, d in ol if d is not None and d <= 40 for s in SEEDS]
     with ProcessPoolExecutor(max_workers=12) as pool:
         out = list(pool.map(run, jobs, chunksize=1))
     print(f"{'U/Uf':>6} {'settle s':>9} {'err a':>7} {'err b':>7} {'err h':>7}"
           f" {'zeta est':>10} {'truth':>8}")
     k = 0
+    olz = []
     for r, d in ol:
         if d is None or d > 40:
             print(f"{r:>6.2f} {'-':>9}   open-loop test not possible: "
@@ -403,20 +444,26 @@ def main():
         U = r*UF
         Pa, Ga, _, Ca = sampled_plant(sec_t, U)
         f = out[k]["f"]; Gt = frf(Pa, Ga, Ca, f)[:, 0, :]
-        e, zz = [], []
-        for _ in SEEDS:
-            o = out[k]; k += 1
-            G = o["Yp"].mean(0)/o["Up"].mean(0)
-            e.append(np.median(np.abs(G - Gt)/np.abs(Gt), axis=1))
-            zz.append(flutter_mode(modal_fit(f, G))[0])
-        e = np.median(e, axis=0)
+        os_ = out[k:k + len(SEEDS)]; k += len(SEEDS)
+        Gs = np.array([o["Yp"].mean(0)/o["Up"].mean(0) for o in os_])
+        e = np.median([np.median(np.abs(G - Gt)/np.abs(Gt), axis=1) for G in Gs], axis=0)
+        zz = flutter_mode(modal_fit(f, Gs.mean(0), weights=line_weights(os_)))[0]
+        olz.append((r, zz))
         print(f"{r:>6.2f} {d*P:>9.0f} {e[0]:>7.3f} {e[1]:>7.3f} {e[2]:>7.3f}"
-              f" {np.median(zz):>+10.4f} {truth_mode(sec_t, U)[0]:>+8.4f}")
+              f" {zz:>+10.4f} {truth_mode(sec_t, U)[0]:>+8.4f}")
+    (r1, z1), (r2, z2) = olz[-2], olz[-1]
+    Uex = r2 + z2*(r2 - r1)/(z1 - z2)
+    print(f"  subcritical extrapolation of the last two open-loop points to zeta = 0:"
+          f" {Uex:.4f} U_f; truth {UFt/UF:.4f}, "
+          + ("UNCONSERVATIVE" if Uex > UFt/UF else "conservative"))
+    print("  (the conventional flutter-test answer: no controller needed, but it")
+    print("   cannot see past the instability)")
 
     # ------------------------------------------------------------- 4
     print("\n" + "=" * 86); print("4. WITH FREEPLAY IN THE TRUTH"); print("=" * 86)
     print("  the AFS was designed on the linear nominal model and never saw the gap.")
-    print("  truth for the error is the TRUE STIFF linear plant.")
+    print("  beta-channel error against the TRUE STIFF plant, and in brackets against")
+    print("  the TRUE FREE-REGION plant (flap inside the gap, no restoring moment).")
     fp_cases = (("symmetric gap", "hinge", 0.0), ("hinge preload p = 1", "hinge", 1.0))
     fp_ratios = (0.50, 0.80, 1.00, 1.10)
     jobs, keys = [], []
@@ -426,12 +473,12 @@ def main():
             f0 = preload_forcing(sec_t, U, kind, lev)
             for s in SEEDS[:4]:
                 jobs.append((sec_t, U, Ks[r][0], s, True, "freeplay", f0,
-                             drops[r] + 4, drops[r]))
+                             drops[r] + 8, drops[r]))
                 keys.append((label, r))
     with ProcessPoolExecutor(max_workers=12) as pool:
         out = list(pool.map(run, jobs, chunksize=1))
     print(f"{'case':>20} {'U/Uf':>6} {'max|db|/d':>9} {'switch':>7} "
-          + " ".join(f"{n:>11}" for n in NAMES) + "    <- beta-channel error")
+          + " ".join(f"{n:>17}" for n in NAMES))
     for label, kind, lev in fp_cases:
         for r in fp_ratios:
             os_ = [o for kk, o in zip(keys, out) if kk == (label, r)]
@@ -440,15 +487,22 @@ def main():
             U = r*UF
             Ka, Kd = Ks[r]
             f = os_[0]["f"]
-            Pa, Ga, _, Ca = sampled_plant(sec_t, U)
-            Gt = frf(Pa, Ga, Ca, f)[:, 0, :]
-            eb = {n: np.median([np.median(np.abs(estimates(o, Ka, Kd)[n][1] - Gt[1])/np.abs(Gt[1]))
-                                for o in os_]) for n in NAMES}
+            ref = {}
+            for reg in ("stiff", "free"):
+                Pa, Ga, _, Ca = sampled_plant(sec_t, U, region=reg)
+                ref[reg] = frf(Pa, Ga, Ca, f)[1, 0, :]
+            eb = {(n, reg): np.median([np.median(np.abs(estimates(o, Ka, Kd)[n][1] - ref[reg])
+                                                 /np.abs(ref[reg])) for o in os_])
+                  for n in NAMES for reg in ref}
             print(f"{label:>20} {r:>6.2f} {np.median([o['bmax'] for o in os_]):>9.2f}"
                   f" {int(np.median([o['switches'] for o in os_])):>7d} "
-                  + " ".join(f"{eb[n]:>11.3f}" for n in NAMES))
-    print("  with preload the flap stays on its stop (no switching) and the plant is")
-    print("  exactly the stiff linear one; with a symmetric gap it is not.")
+                  + " ".join(f"{eb[(n, 'stiff')]:>8.3f} ({eb[(n, 'free')]:>5.2f})" for n in NAMES))
+    print("  With preload the flap stays on its stop (few or no switching events) and")
+    print("  the estimate is the stiff plant. With a symmetric gap the flap rattles")
+    print("  across the gap at about 1.3 gap widths, and the estimate is the FREE-region")
+    print("  plant to within a few percent: at that amplitude the effective stiffness is")
+    print("  close to zero (describing-function gamma ~ 0.05). The plant a closed-loop")
+    print("  test returns is set by the flap amplitude relative to the gap.")
 
 
 if __name__ == "__main__":
