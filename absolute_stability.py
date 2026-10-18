@@ -24,6 +24,12 @@ BOUNDS.
 Either condition certifies global asymptotic stability for ALL nonlinearities
 in the sector. Below the certified speed no disturbance of any size can produce
 sustained motion. That is what a describing function cannot claim.
+
+NARROWER SECTOR [k1, k]. If the nonlinearity is known to satisfy
+k1 <= phi(beta)/beta <= k with k1 > 0, the loop transformation
+A_free -> A_free - B k1 C moves k1 of the stiffness into the linear part and
+leaves phi - k1*beta in [0, k - k1]. Freeplay about a preloaded operating point
+is such a case (preload.py). k1 = 0 is the memo's original test.
 """
 import numpy as np
 from scipy.linalg import inv
@@ -50,18 +56,21 @@ def G(A, B, C, w):
                      for wi in w])
 
 
-def circle_margin(sec, U, w, sd=True):
+def circle_margin(sec, U, w, sd=True, k1=0.0):
     """min_w Re[G] + 1/k. Positive => circle criterion certifies stability.
     Returns -inf if A_free is not Hurwitz (criterion needs it)."""
     A, B, C, k, _ = loop(sec, U, sd)
+    A, k = A - B*k1 @ C, k - k1
     if np.linalg.eigvals(A).real.max() >= 0:
         return -np.inf
     return float(np.min(G(A, B, C, w).real) + 1/k)
 
 
-def popov_margin(sec, U, w, sd=True):
-    """max over eta >= 0 of min_w Re[(1+j w eta)G] + 1/k."""
+def popov_margin(sec, U, w, sd=True, k1=0.0):
+    """max over eta >= 0 of min_w Re[(1+j w eta)G] + 1/k, for the sector
+    [k1, k] after the loop transformation (k1 = 0: sector [0, k])."""
     A, B, C, k, _ = loop(sec, U, sd)
+    A, k = A - B*k1 @ C, k - k1
     if np.linalg.eigvals(A).real.max() >= 0:
         return -np.inf
     g = G(A, B, C, w)

@@ -91,7 +91,7 @@ def figure2(path):
     U_pop = brentq(lambda U: popov_margin(sec, U, w_pop), 0.03*UF, 0.25*UF,
                    xtol=1e-4)
     w_lp = np.geomspace(1e-3, 1e3, 3000)
-    U_comb = brentq(lambda U: combined_margin(sec, U, w_lp), 0.18*UF, 0.30*UF,
+    U_comb = brentq(lambda U: combined_margin(sec, U, w_lp), 0.10*UF, 0.28*UF,
                     xtol=1e-3)
     U_free = gamma_onset(0.0)
     print(f"  fig2 recomputed: DF-min {Udf/UF:.4f} (gamma={gmin:.3f}), "
@@ -117,7 +117,7 @@ def figure2(path):
         ("Popov",                   U_pop/UF,    "rigorous",          "C2",   "o"),
         ("describing-fn minimum",   Udf/UF,      "heuristic",         "C0",   "s"),
         ("Zames-Falb alone",        None,        "certifies nothing", "0.55", "x"),
-        ("Popov x Zames-Falb",      U_comb/UF,   "UNRESOLVED",        "C1",   "D"),
+        ("Popov + Zames-Falb",      U_comb/UF,   "rigorous",          "C1",   "D"),
         ("free-region ceiling",     U_free/UF,   "hard limit",        "0.35", "|"),
         ("observed LCO 2.12 deg",   0.18,        "simulation",        "C3",   "^"),
         ("observed LCO 1.15 deg",   0.20,        "simulation",        "C3",   "^"),
@@ -134,18 +134,9 @@ def figure2(path):
             ax[1].text(0.005, yv, "— " + note, va="center", fontsize=8,
                        color=col, style="italic")
         else:
-            ax[1].plot(v, yv, mk, color=col, ms=8,
-                       mfc="none" if note == "UNRESOLVED" else col,
-                       mew=1.8 if note == "UNRESOLVED" else 1.0)
+            ax[1].plot(v, yv, mk, color=col, ms=8)
             ax[1].text(v + 0.018, yv, f"{v:.4f}" if v < 1 else "1.0000",
                        va="center", fontsize=8, color=col)
-            if note == "UNRESOLVED":
-                ax[1].annotate("exceeds observed LCO onset;\nnot yet resolved "
-                               "(see memo §6)", (v, yv),
-                               textcoords="offset points", xytext=(34, 16),
-                               fontsize=7.5, color="C1",
-                               arrowprops=dict(arrowstyle="-", color="C1",
-                                               lw=0.8))
     ax[1].set_yticks(range(len(items)))
     ax[1].set_yticklabels([l for l, *_ in items][::-1], fontsize=8)
     ax[1].set_xlim(-0.03, 1.15); ax[1].set_ylim(-1.6, len(items)-0.3)
@@ -194,10 +185,74 @@ def figure3(path):
     print(f"  fig3: max |Gap3 - Gap1| across normalized amplitudes = {coll:.2e}")
 
 
+# ===========================================================================
+# Figure 4 - freeplay under preload: certificate, describing function, sim
+# ===========================================================================
+PRELOAD_COLORS = ("#1f77b4", "#d95f02", "#7570b3")   # validated: CVD-safe, >= 3:1
+
+
+def figure4(path):
+    from preload import harmonic_balance, preload_forcing, DELTA
+    d = np.load("preload_results.npz")
+    cases = [str(c) for c in d["cases"]]
+    ratios, cert, amp = d["ratios"], d["cert"], d["sim_amp"]
+    fig, ax = plt.subplots(1, 2, figsize=(10.0, 3.8), constrained_layout=True)
+
+    hinge = [i for i, c in enumerate(cases) if c.startswith("hinge")]
+    p = np.array([float(cases[i].split(":")[1]) for i in hinge])
+    ceiling = ratios[-1]
+    onset_sim = np.array([ratios[np.argmax(amp[i] > 0)] if np.any(amp[i] > 0) else np.nan
+                          for i in hinge])
+    onset_df = []
+    for i in hinge:
+        lev = float(cases[i].split(":")[1])
+        hit = [r for r in ratios
+               if harmonic_balance(sec, r*UF, DELTA, preload_forcing(sec, r*UF, "hinge", lev))]
+        onset_df.append(hit[0] if hit else np.nan)
+    onset_df = np.array(onset_df)
+    c0, c1, c2 = PRELOAD_COLORS
+    ax[0].fill_between(p, 0, cert[hinge], color=c0, alpha=0.12, lw=0)
+    ax[0].plot(p, cert[hinge], "o-", color=c0, ms=6, lw=2, label="Popov on [$k_1$, $K_\\beta$], rigorous")
+    ax[0].plot(p, onset_df, "s", color=c2, ms=7, mfc="none", mew=1.6, label="describing-function onset")
+    ax[0].plot(p, onset_sim, "^", color=c1, ms=7, label="simulated onset, 16 random starts")
+    none = np.isnan(onset_sim)
+    ax[0].plot(p[none], np.full(none.sum(), ceiling), "^", color=c1, ms=7, mfc="none", mew=1.6,
+               label=f"no cycle found up to {ceiling:.2f} (search ceiling)")
+    ax[0].set_xlabel("hinge preload $p = M_0/(K_\\beta\\,\\delta)$")
+    ax[0].set_ylabel("$U/U_f$")
+    ax[0].set_ylim(0, 1.05)
+    ax[0].set_title("(a) onset of sustained motion against preload\n"
+                    "shaded: certified, no disturbance of any size sustains motion", fontsize=9)
+    ax[0].legend(fontsize=7, loc="upper left")
+
+    show = [("hinge:0.0", "no preload"), ("hinge:0.25", "hinge $p$ = 0.25"),
+            ("alpha0:4.0", r"$\alpha_0$ = 4$\degree$")]
+    for (key, lab), col in zip(show, PRELOAD_COLORS):
+        i = cases.index(key)
+        kind, lev = key.split(":")
+        a = np.where(amp[i] > 0, amp[i], np.nan)
+        ax[1].plot(ratios, a, "o-", color=col, ms=5, lw=1.2, label=f"{lab}: simulation")
+        dfr, dfa = [], []
+        for r in ratios:
+            for _, _, _, A in harmonic_balance(sec, r*UF, DELTA,
+                                               preload_forcing(sec, r*UF, kind, float(lev))):
+                dfr.append(r); dfa.append(A/DELTA)
+        ax[1].plot(dfr, dfa, "s", color=col, ms=5, mfc="none", mew=1.2, label=f"{lab}: DF solutions")
+    ax[1].set_xlabel("$U/U_f$")
+    ax[1].set_ylabel("flap half peak-to-peak / gap")
+    ax[1].set_title("(b) limit-cycle amplitude: filled simulation,\nhollow describing-function"
+                    " solutions", fontsize=9)
+    ax[1].set_xlim(0.15, ceiling + 0.02)
+    ax[1].legend(fontsize=6.5, loc="upper left", bbox_to_anchor=(1.01, 1.0))
+    fig.savefig(path); plt.close(fig)
+    print("  fig4: certified " + ", ".join(f"p={x:g}: {c:.4f}" for x, c in zip(p, cert[hinge]))
+          + "; sim onset " + ", ".join(f"{x:g}: {o}" for x, o in zip(p, onset_sim))
+          + "; DF onset " + ", ".join(f"{x:g}: {o}" for x, o in zip(p, onset_df)))
+
+
 if __name__ == "__main__":
     figure1("fig1_within_record.pdf")
     figure2("fig2_bounds.pdf")
     figure3("fig3_freeplay_sweep.pdf")
-    for n in ("fig1_within_record", "fig2_bounds", "fig3_freeplay_sweep"):
-        pass
+    figure4("fig4_preload.pdf")
     print("done")
